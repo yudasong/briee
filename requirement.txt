@@ -1,0 +1,5 @@
+numpy
+gym
+matplotlib
+scipy
+wandb
