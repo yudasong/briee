@@ -1,5 +1,5 @@
 # Code for paper Efficient Reinforcement Learning in Block MDPs: A Model-free Representation Learning approach
-Paper link: [In preparation]
+Paper link: [arXiv](https://arxiv.org/abs/2202.00063)
 
 ## Prerequisites
 
