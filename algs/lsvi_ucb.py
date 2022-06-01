@@ -105,11 +105,3 @@ class LSVI_UCB(object):
             self.W[h] = torch.load("{}/W_{}.pth".format(path,str(h)))
             self.Sigma_invs[h] = torch.load("{}/Sigma_{}.pth".format(path,str(h)))
 
-
-
-
-
-
-
-
-

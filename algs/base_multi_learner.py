@@ -30,7 +30,7 @@ def weight_init(m):
 
 
 class Feature(nn.Module):
-    def __init__(self, obs_dim, action_dim, device, state_dim=3, tau=1, softmax="vanilla"):
+    def __init__(self, obs_dim, action_dim, device, state_dim=3, tau=1, num_sources=3, softmax="vanilla"):
         super().__init__()
 
         self.device = device
@@ -41,8 +41,12 @@ class Feature(nn.Module):
         self.tau = tau
         self.softmax = softmax
 
+        self.num_sources = num_sources
+
         self.encoder = nn.Linear(obs_dim, state_dim, bias=False)
-        self.weights = nn.Linear(state_dim * action_dim, 1, bias=False)
+        self.weights = []
+        for s in range(num_sources):
+            self.weights.append(nn.Linear(state_dim * action_dim, 1, bias=False))
 
         self.apply(weight_init)
 
@@ -68,11 +72,13 @@ class Feature(nn.Module):
         return state_encoding
 
     def reset_weights(self, T):
-        self.weights = nn.Linear(self.state_dim * self.action_dim, T+1, bias=False).to(self.device)
+        self.weights = []
+        for s in num_sources:
+            self.weights.append(nn.Linear(self.state_dim * self.action_dim, T+1, bias=False).to(self.device))
 
-    def predict(self, obs, action):
+    def predict(self, obs, action, source_index):
         phi = self.forward(obs,action)
-        out = self.weights(phi)
+        out = self.weights[source_index](phi)
         return out
 
     def copy_encoder(self, target):
@@ -112,6 +118,7 @@ class Discriminator(nn.Module):
         net = nn.Sequential(
             nn.Linear(self.obs_dim, self.hidden_dim), nn.Tanh(),
             nn.Linear(self.hidden_dim, self.hidden_dim), nn.Tanh(),
+            nn.Linear(self.hidden_dim, self.hidden_dim), nn.Tanh(),
             nn.Linear(self.hidden_dim, 1), nn.Tanh()
         )
 
@@ -142,7 +149,8 @@ class BaseLearner(object):
         optimizer = "sgd",
         softmax = "vanilla",
         reuse_weights = True,
-        temp_path = "temp"
+        temp_path = "temp",
+        num_sources = 3,
     ):
 
         self.obs_dim = obs_dim
@@ -169,7 +177,11 @@ class BaseLearner(object):
 
         self.reuse_weights = reuse_weights
 
-        self.discriminators = Discriminator(obs_dim, hidden_dim, num_update).to(device)
+        self.discriminators = []
+        for s in range(num_sources):
+            self.discriminators.append(
+                Discriminator(obs_dim, hidden_dim, num_update).to(device)
+            )
 
         self.feature_lr = feature_lr
         self.feature_beta = feature_beta
@@ -181,7 +193,9 @@ class BaseLearner(object):
 
         self.temp_path = temp_path
 
-        
+        self.num_sources = num_sources
+
+        self.dis_optimizer = []
 
         if self.optimizer == "Adam":
             self.phi_optimizer = torch.optim.Adam(
@@ -190,9 +204,10 @@ class BaseLearner(object):
             self.phi_tilde_optimizer = torch.optim.Adam(
                 self.phi_tilde.parameters(), lr=feature_lr, betas=(feature_beta, 0.999)
             )
-            self.dis_optimizer = torch.optim.Adam(
-                self.discriminators.parameters(), lr=discriminator_lr, betas=(discriminator_beta, 0.999)
-            )
+            for s in range(num_sources):
+                self.dis_optimizer.append(torch.optim.Adam(
+                    self.discriminators[s].parameters(), lr=discriminator_lr, betas=(discriminator_beta, 0.999)
+                ))
 
         else:
             self.phi_optimizer = torch.optim.SGD(
@@ -201,9 +216,10 @@ class BaseLearner(object):
             self.phi_tilde_optimizer = torch.optim.SGD(
                 self.phi_tilde.parameters(), lr=feature_lr, momentum=0.99
             )
-            self.dis_optimizer = torch.optim.SGD(
-                self.discriminators.parameters(), lr=discriminator_lr, momentum=0.99
-            )
+            for s in range(num_sources):
+                self.dis_optimizer.append(torch.optim.SGD(
+                    self.discriminators[s].parameters(), lr=discriminator_lr, momentum=0.99
+                ))
 
 
 
@@ -214,18 +230,22 @@ class BaseLearner(object):
         loss_list = []
 
         for i in range(self.num_feature_update):
-            obs, actions, rewards, next_obs = replay_buffer.sample(batch_size=self.batch_size)
+            loss = 0
+            
+            for s in range(self.num_sources):
+                obs, actions, rewards, next_obs = replay_buffer[s].sample(batch_size=self.batch_size)
 
-            with torch.no_grad():
-                dis_out = self.discriminators.get_till(next_obs, T)
+                with torch.no_grad():
+                    dis_out = self.discriminators[s].get_till(next_obs, T)
+                    feature = self.phi(obs,actions)
+                    Sigma = torch.matmul(feature.T, feature) + self.lamb * torch.eye(self.feature_dim).to(self.device)
+
+                W = torch.matmul(torch.inverse(Sigma), torch.sum(torch.mul(feature.unsqueeze(-1),dis_out.unsqueeze(-2)),0))
                 feature = self.phi(obs,actions)
-                Sigma = torch.matmul(feature.T, feature) + self.lamb * torch.eye(self.feature_dim).to(self.device)
+                out = torch.matmul(feature, W)
+                loss = loss + F.mse_loss(out, dis_out)  
 
-            W = torch.matmul(torch.inverse(Sigma), torch.sum(torch.mul(feature.unsqueeze(-1),dis_out.unsqueeze(-2)),0))
-            feature = self.phi(obs,actions)
-            out = torch.matmul(feature, W)
-            loss = F.mse_loss(out, dis_out)  
-
+            loss = loss / self.num_sources
             self.phi_optimizer.zero_grad()
             loss.backward()
             self.phi_optimizer.step()
@@ -248,7 +268,9 @@ class BaseLearner(object):
         self.phi.apply(weight_init)
         
         self.phi_tilde.apply(weight_init)
-        self.discriminators.apply(weight_init)        
+        
+        for s in range(self.num_sources):
+            self.discriminators[s].apply(weight_init)        
 
         feature_losses = []
         adv_losses = []

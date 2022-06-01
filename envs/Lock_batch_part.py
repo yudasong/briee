@@ -4,7 +4,6 @@ from gym.spaces import Discrete, Box
 import scipy.linalg
 import math
 
-noise_types = ["hadamard_gaussian", "hadamard_uniform", "hadamard_bernoulli",  "hadamard_uniposneg", "hadamard_berposneg"]
 
 '''
 fast sampling. credit: https://stackoverflow.com/questions/34187130/fast-random-weighted-selection-across-all-rows-of-a-stochastic-matrix/34190035
@@ -22,7 +21,7 @@ def sample(prob_matrix, items, n):
     return items[idx]
 
 
-class LockBatch(gym.Env):
+class LockBatchPartition(gym.Env):
     """A (stochastic) combination lock environment.
     
     Can configure the length, dimension, and switching probability via env_config"""
@@ -30,8 +29,8 @@ class LockBatch(gym.Env):
     def __init__(self,env_config={}):
         self.initialized=False
 
-    def init(self,horizon=100, action_dim=10, p_switch=0.5, p_anti_r=0.5, anti_r=0.1,noise=0.1, num_envs=10, temperature=1, 
-                variable_latent=False, dense=False, noise_type="hadamard_gaussian"):
+    def init(self,num_partition = 3, index=0, horizon=100, action_dim=10, p_switch=0.5, p_anti_r=0.5, anti_r=0.1,noise=0.1, num_envs=10, temperature=1, 
+                variable_latent=False, dense=False):
         self.initialized=True
         self.max_reward=1
         self.horizon=horizon
@@ -41,7 +40,11 @@ class LockBatch(gym.Env):
 
         self.reward_range = (0.0,1.0)
 
-        self.observation_dim = 2 ** int(math.ceil(np.log2(self.horizon+4)))
+        self.num_partition = num_partition
+
+        self.single_observation_dim = 2 ** int(math.ceil(np.log2(self.horizon+4))) 
+        self.observation_dim = self.single_observation_dim * num_partition
+        self.index = index
 
         self.observation_space = Box(low=0.0, high=1.0, shape=(self.observation_dim,),dtype=np.float)
 
@@ -50,11 +53,7 @@ class LockBatch(gym.Env):
         self.anti_r = anti_r
         self.noise = noise
 
-        assert noise_type in noise_types
-        self.noise_type = noise_type
-
-        self.rotation = scipy.linalg.hadamard(self.observation_space.shape[0])
-
+        self.rotation = scipy.linalg.hadamard(self.single_observation_dim)
         self.num_envs = num_envs
         self.tau = temperature
 
@@ -169,15 +168,16 @@ class LockBatch(gym.Env):
 
     def make_obs(self, s, h):
 
-        x = np.zeros((self.num_envs, self.observation_space.shape[0]))
-        x[:,:(self.horizon+self.state_dim)] = np.random.normal(0,self.noise,[self.num_envs,self.horizon+self.state_dim])
-            
+        obs = np.zeros((self.num_envs, self.observation_space.shape[0]))
+        x = np.zeros((self.num_envs, self.single_observation_dim))
+        x[:,:(self.horizon+self.state_dim)] = np.random.normal(0,self.noise,[self.num_envs,self.horizon+self.state_dim])            
         x[np.arange(self.num_envs), s] += 1
         x[:,self.state_dim+h] += 1
         self.latents = x[:,:3]
         x = np.matmul(self.rotation, x.T).T
+        obs[:, (self.index * self.single_observation_dim):((self.index+1)* self.single_observation_dim)] = x
 
-        return x
+        return obs
 
     def sample_latent(self, obs):
         
@@ -185,6 +185,7 @@ class LockBatch(gym.Env):
 
         softmax = latent_exp / latent_exp.sum(axis=-1, keepdims=True)
         self.state = sample(softmax, self.all_latents, self.num_envs)
+
 
     def trim_observation(self,o,h):
         return (o)

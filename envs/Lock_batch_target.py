@@ -22,7 +22,7 @@ def sample(prob_matrix, items, n):
     return items[idx]
 
 
-class LockBatch(gym.Env):
+class LockBatchTarget(gym.Env):
     """A (stochastic) combination lock environment.
     
     Can configure the length, dimension, and switching probability via env_config"""
@@ -31,7 +31,7 @@ class LockBatch(gym.Env):
         self.initialized=False
 
     def init(self,horizon=100, action_dim=10, p_switch=0.5, p_anti_r=0.5, anti_r=0.1,noise=0.1, num_envs=10, temperature=1, 
-                variable_latent=False, dense=False, noise_type="hadamard_gaussian"):
+                variable_latent=False, dense=False, partition=False, source_envs=[]):
         self.initialized=True
         self.max_reward=1
         self.horizon=horizon
@@ -40,9 +40,19 @@ class LockBatch(gym.Env):
         self.action_space = Discrete(self.action_dim)
 
         self.reward_range = (0.0,1.0)
+        self.partition = partition
 
-        self.observation_dim = 2 ** int(math.ceil(np.log2(self.horizon+4)))
+        self.num_sources = len(source_envs)
 
+        if self.partition:
+            self.single_observation_dim = 2 ** int(math.ceil(np.log2(self.horizon+4))) 
+            self.observation_dim = self.single_observation_dim * self.num_sources
+            self.rotation = scipy.linalg.hadamard(self.single_observation_dim)
+        
+        else:
+            self.observation_dim = 2 ** int(math.ceil(np.log2(self.horizon+4)))
+            self.rotation = scipy.linalg.hadamard(self.observation_dim)
+        
         self.observation_space = Box(low=0.0, high=1.0, shape=(self.observation_dim,),dtype=np.float)
 
         self.p_switch = p_switch
@@ -50,10 +60,11 @@ class LockBatch(gym.Env):
         self.anti_r = anti_r
         self.noise = noise
 
-        assert noise_type in noise_types
-        self.noise_type = noise_type
+        #assert noise_type in noise_types
+        #self.noise_type = noise_type
 
-        self.rotation = scipy.linalg.hadamard(self.observation_space.shape[0])
+        
+        #self.rotations = []
 
         self.num_envs = num_envs
         self.tau = temperature
@@ -69,6 +80,22 @@ class LockBatch(gym.Env):
 
         self.opt_a = np.random.randint(low=0, high=self.action_space.n, size=self.horizon)
         self.opt_b = np.random.randint(low=0, high=self.action_space.n, size=self.horizon)
+
+        index0 = np.random.randint(low=0, high=len(source_envs))
+        self.index0 = index0
+        self.source_index = np.random.randint(low=0, high=len(source_envs), size=self.horizon)
+        for h in range(self.horizon):
+            env_h = source_envs[self.source_index[h]]
+            if not self.partition:
+                while env_h.opt_a[h] == env_h.opt_b[h]:
+                    self.source_index[h] = np.random.randint(low=0, high=len(source_envs))
+                    env_h = source_envs[self.source_index[h]]
+            self.opt_a[h] = env_h.opt_a[h]
+            self.opt_b[h] = env_h.opt_b[h]
+
+        if self.partition:
+            self.opt_a = source_envs[0].opt_a
+            self.opt_b = source_envs[1].opt_b
 
         print("[LOCK] Initializing Combination Lock Environment")
         print("[LOCK] A sequence: ", end="")
@@ -168,13 +195,34 @@ class LockBatch(gym.Env):
         return counts
 
     def make_obs(self, s, h):
+        index = self.index0 if h == 0 else self.source_index[h-1]
+
+        if self.partition:
+            obs = np.zeros((self.num_envs, self.observation_space.shape[0]))
+            x = np.zeros((self.num_envs, self.single_observation_dim))
+            x[:,:(self.horizon+self.state_dim)] = np.random.normal(0,self.noise,[self.num_envs,self.horizon+self.state_dim])            
+            x[np.arange(self.num_envs), s] += 1
+            x[:,self.state_dim+h] += 1
+            self.latents = x[:,:3]
+            x = np.matmul(self.rotation, x.T).T
+            for n in range(self.num_envs):
+                if type(s) == int:
+                    cur_s = s
+                else: 
+                    cur_s = s[n]
+                if cur_s != 2:
+                    obs[n, (cur_s * self.single_observation_dim):((cur_s+1)* self.single_observation_dim)] = x[n]
+                else:
+                    obs[n, (index * self.single_observation_dim):((index+1)* self.single_observation_dim)] = x[n]
+            return obs
 
         x = np.zeros((self.num_envs, self.observation_space.shape[0]))
         x[:,:(self.horizon+self.state_dim)] = np.random.normal(0,self.noise,[self.num_envs,self.horizon+self.state_dim])
-            
         x[np.arange(self.num_envs), s] += 1
         x[:,self.state_dim+h] += 1
+
         self.latents = x[:,:3]
+
         x = np.matmul(self.rotation, x.T).T
 
         return x
@@ -185,6 +233,7 @@ class LockBatch(gym.Env):
 
         softmax = latent_exp / latent_exp.sum(axis=-1, keepdims=True)
         self.state = sample(softmax, self.all_latents, self.num_envs)
+
 
     def trim_observation(self,o,h):
         return (o)
