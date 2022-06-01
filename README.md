@@ -1,5 +1,13 @@
-# Code for paper Efficient Reinforcement Learning in Block MDPs: A Model-free Representation Learning approach
-Paper link: [arXiv](https://arxiv.org/abs/2202.00063)
+# Representation Learning and Representaional Transfer (+ Multi-task) in RL 
+This repository contains a series of works for representional learning in RL. 
+
+## Contents
+### Briee (model-free representation learning in RL)
+The main branch contains the code for Briee, the ICML 2022 paper [Efficient Reinforcement Learning in Block MDPs: A Model-free Representation Learning approach](https://arxiv.org/abs/2202.00063). 
+
+### RepTransfer (Representaional Transfer (+ Multi-task) in RL)
+The [reptransfer branch](https://github.com/yudasong/briee/tree/reptransfer) contains the code for RepTransfer, [Provable Benefits of Representational Transfer in Reinforcement Learning](https://arxiv.org/abs/2205.14571)
+
 
 ## Prerequisites
 
